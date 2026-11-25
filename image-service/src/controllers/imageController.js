@@ -1,39 +1,43 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { requireDoctor, requireStaff } from '../middleware/authenticate.js';
-import { parsePatientId, validateImageId } from '../validation/imageValidation.js';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { config } from '../config.js';
 
-export function createImageRouter(images, maxFileSize) {
-  const router = Router();
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: maxFileSize, files: 1, fields: 1, fieldSize: 100, parts: 2 },
-  }).single('image');
+export function createImageRouter() {
+    const router = Router();
 
-  router.post('/', requireStaff, upload, async (request, response) => {
-    const patientId = parsePatientId(request.body?.patientId);
-    const image = await images.upload(patientId, request.file, request.user);
-    response.location(image.url).status(201).json(image);
-  });
+    const upload = multer({
+        storage: multer.diskStorage({
+            destination: config.uploadDirectory,
+            filename: (req, file, cb) => {
+                const unique = Date.now() + '-' + Math.round(Math.random() * 1000);
+                cb(null, unique + path.extname(file.originalname));
+            },
+        }),
+        limits: { fileSize: 10 * 1024 * 1024 },
+    }).single('image');
 
-  router.get('/', async (request, response) => {
-    const patientId = parsePatientId(request.query.patientId);
-    const patientImages = await images.list(patientId, request.user);
-    response.json(patientImages);
-  });
+    router.post('/', upload, (request, response) => {
+        if (!request.file) {
+            return response.status(400).json({ message: 'Ingen fil skickades' });
+        }
+        response.status(201).json({
+            filename: request.file.filename,
+            url: `/api/images/${request.file.filename}`,
+            uploadedBy: request.user.username,
+        });
+    });
 
-  router.get('/:id', async (request, response) => {
-    const id = validateImageId(request.params.id);
-    const image = await images.read(id, request.user);
-    response.set('X-Image-Version', String(image.version));
-    response.type('png').send(image.bytes);
-  });
+    router.get('/:filename', async (request, response) => {
+        try {
+            const filePath = path.join(config.uploadDirectory, request.params.filename);
+            const data = await readFile(filePath);
+            response.send(data);
+        } catch {
+            response.status(404).json({ message: 'Bilden hittades inte' });
+        }
+    });
 
-  router.put('/:id/annotate', requireDoctor, async (request, response) => {
-    const id = validateImageId(request.params.id);
-    const image = await images.annotate(id, request.body, request.user);
-    response.json(image);
-  });
-
-  return router;
+    return router;
 }

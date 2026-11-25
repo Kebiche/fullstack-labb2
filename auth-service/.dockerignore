@@ -1,7 +1,0 @@
-.git
-.idea
-src
-postman
-k8s
-.env
-target/*.original
